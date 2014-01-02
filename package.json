@@ -1,0 +1,18 @@
+{
+  "name": "s3watcher",
+  "version": "0.0.0",
+  "description": "Watch an s3 bucket for new keys",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": {
+    "name": "Mapbox",
+    "email": "info@mapbox.com",
+    "url": "http://mapbox.com/"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "aws-sdk": "~2.0.0-rc4"
+  }
+}
