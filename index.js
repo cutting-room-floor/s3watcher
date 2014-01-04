@@ -4,9 +4,9 @@ var Readable = require('stream').Readable;
 module.exports = watch = new Readable();
 var config, s3;
 
-
 watch.config = function(c){
     config = c;
+    config.prefexDir = getPrefixDir(config.markerPrefix);
     AWS.config.update({accessKeyId: c.awsKey, secretAccessKey: c.awsSecret});
     s3 = new AWS.S3();
 };
@@ -14,50 +14,129 @@ watch.config = function(c){
 // Files from cloudfront look like this:
 // {bucket-name}.s3.amazonaws.com/{optional-prefix/}{distribution-ID}.{YYYY}-{MM}-{DD}-{HH}.{unique-ID}.gz
 
-var baseMarker = process.env.BASE_MARKER;
-var seenKeys = [];
+var lastDate = null;
 
-function checkForNew(){
+function checkForNew(initial, cb){
 
-    var hours = last24hours();
-    hours.forEach(function(h){
-        checkForNewByTime(h);
+    var hours = calcHours(config.hoursBack);
+    (function load(items, callback) {
+        var loaded = new Array(items.length);
+        var error;
+        items.forEach(function(item, i) {
+            checkForNewByTime(item, initial, function(err, obj) {
+                error = error || err;
+                loaded[i] = err || obj;
+                if (loaded.filter(function(n) { return n; }).length === loaded.length) {
+                    callback(error, loaded);
+                }
+            });
+        });
+    })(hours, function(err, results) {
+        resultDate = results.reduce(function(a, b){
+            return (a > b ? a : b);
+        });
+
+        if(resultDate > lastDate){
+            lastDate = resultDate;
+            console.log("new date:", lastDate);
+            //save date
+        }
+        cb(err);
     });
 }
 
 var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
-var days = ['01','02','03','04','05','06','07','08','09','10','11','12','13','14','15','16',
-            '17','18','19','20','21','22','23','24','25','26','27','28','29','30','31'];
 
-function last24hours(){
-    var hours = Array.apply(null, Array(24));
+function calcHours(count){
+    count = count || 24;
+    var hours = Array.apply(null, Array(count));
     var now = new Date();
     hours = hours.map(function(_, i){
         var d = new Date(now-36e5*(i+1));
-        return d.getFullYear()+"-"+months[d.getMonth()]+"-"+days[d.getDay()]+"-"+d.getHours();
+
+        var dayOfMonth = d.getUTCDate()+'';
+        if(dayOfMonth.length < 2)
+            dayOfMonth = '0'+dayOfMonth;
+
+        var hour = d.getUTCHours()+'';
+        if(hour.length < 2)
+            hour = '0'+hour;
+
+        return d.getUTCFullYear()+'-'+months[d.getUTCMonth()]+'-'+dayOfMonth+'-'+hour;
     });
 
     return hours;
 }
 
-function checkForNewByTime(date){
-    
-    var opts = {"Marker":baseMarker+date,
-                "Prefix":baseMarker+date,
-                "Bucket":config.bucket};
+function checkForNewByTime(date, initial, cb){
+
+    var opts = {Marker:config.markerPrefix+date,
+                Prefix:config.markerPrefix+date,
+                Bucket:config.bucket};
+
+    var newLastDate = lastDate;
 
     s3.listObjects(opts, function(err, data){
-        if(err) console.log("Error", err);
+        if(err) return cb(err);
+
+        console.log('in ', date, 'we have: ', data.Contents.length);
 
         data.Contents.forEach(function(c){
-
-            if(seenKeys.indexOf(c.Key) === -1){  
-                seenKeys.push(c.Key);
-                watch.push(c.Key+"\n");
+            if(!initial && lastDate){
+                if(c.LastModified > lastDate)
+                    watch.push(c.Key+'\n');
+            }else{
+                watch.push(c.Key+'\n');
             }
+
+            if(c.LastModified > newLastDate)
+                newLastDate = c.LastModified;
         });
+
+        cb(err, newLastDate);
+
     });
 }
+
+function getPrefixDir(markerPrefix){
+    var prefixDir = markerPrefix;
+    if(markerPrefix[markerPrefix.length-1] !== '/'){
+        var segs = markerPrefix.split('/');
+        segs.pop();
+        prefixDir = segs.join('/') + "/";
+    }
+    return prefixDir;
+}
+
+function setLastDate(date){
+    var opts = {Bucket:config.bucket,
+                Key:config.prefixDir+'.s3watcher',
+                Body:date.toUTCString()};
+
+  //  s3.putObject(opts, function(err, resp){
+   //     if(err) console.log(err);
+    //});
+}
+
+function getLastDate(cb){
+    var opts = {Bucket:config.bucket,
+                Key:config.prefixDir+'.s3watcher'};
+
+    s3.getObject(opts, function(err, resp){
+        if(err) return cb(err);
+
+        console.log(resp);
+
+        try{
+            var lastDate = new Date(resp.Body);
+            cb(err, lastDate);
+        }catch(e){
+            cb(e);
+        }
+    });
+}
+
+
 
 var started = false;
 watch._read = function(){
@@ -68,9 +147,17 @@ watch._read = function(){
 };
 
 function start(){
+    var init = true;
+
     var check = function(){
-        checkForNew();
-        setTimeout(check, 5000);
+
+        console.log('checking');
+
+        checkForNew(init, function(err){
+            setTimeout(check, 10000);
+        });
+        init = false;
+
     };
     check();
 }
