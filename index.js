@@ -45,7 +45,7 @@ watch.checkForNew = function(initial, cb){
         }
 
     });
-}
+};
 
 var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
 
@@ -77,25 +77,38 @@ function checkForNewByTime(date, initial, cb){
                 Bucket:config.bucket};
 
     var newLastDate = lastDate;
-    s3.listObjects(opts, function(err, data){
-        if(err) return cb(err);
 
-        data.Contents.forEach(function(c){
-            if(!initial && lastDate){
-                if(c.LastModified > lastDate){
+    var fetch = function(opts){
+
+        s3.listObjects(opts, function(err, data){
+            if(err) return cb(err);
+
+            data.Contents.forEach(function(c){
+                if(!initial && lastDate){
+                    if(c.LastModified > lastDate){
+                        watch.push(c.Key+'\n');
+                    }
+                }else{
                     watch.push(c.Key+'\n');
                 }
-            }else{
-                watch.push(c.Key+'\n');
-            }
 
-            if(c.LastModified > newLastDate)
-                newLastDate = c.LastModified;
+                if(c.LastModified > newLastDate)
+                    newLastDate = c.LastModified;
+            });
+
+
+            if(data.IsTruncated){
+                if(!data.NextMarker)
+                    opts.Marker = data.Contents[data.Contents.length-1].Key;
+                else
+                    opts.Marker = data.NextMarker;
+                fetch(opts);
+            }else
+                cb(err, newLastDate);
+
         });
-
-        cb(err, newLastDate);
-
-    });
+    };
+    fetch(opts);
 }
 
 watch.getPrefixDir = function(markerPrefix){

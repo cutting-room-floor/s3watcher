@@ -4,7 +4,7 @@
   "description": "Watch an s3 bucket for new keys",
   "main": "index.js",
   "scripts": {
-    "test": "jshint index.js; mocha"
+    "test": "jshint index.js; foreman run mocha"
   },
   "author": {
     "name": "Mapbox",

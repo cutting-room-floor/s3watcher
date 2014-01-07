@@ -74,6 +74,7 @@ describe('s3watcher module', function() {
                     assert(streamKeys.indexOf(keys[3]) !== -1);
 
 
+                    // this is a quite a hack, but I only want this to happen after this test..
                     putOpts = {Key: 'tiles/asdfasdf.' + hours[0] + '.12346.gz', Bucket: process.env.BUCKET};
                     newKey = putOpts.Key;
                     keys.push(putOpts.Key);
@@ -81,7 +82,6 @@ describe('s3watcher module', function() {
                     done();
                 }
             });
-
         });
     });
     describe("watch for new keys", function(){
@@ -93,10 +93,8 @@ describe('s3watcher module', function() {
                 assert.equal(newKey, d.toString('utf8').split("\n")[0]);
                 done();
             });
-
-
-
         });
+
         it("should save the last modified time", function(done){
             // check to make sure .s3watcher file is up to date
 
