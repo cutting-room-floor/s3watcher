@@ -6,7 +6,8 @@ var config, s3;
 
 watch.config = function(c){
     config = c;
-    config.prefexDir = getPrefixDir(config.markerPrefix);
+    config.timeout = config.timeout || 3e5;
+    config.prefixDir = watch.getPrefixDir(c.markerPrefix);
     AWS.config.update({accessKeyId: c.awsKey, secretAccessKey: c.awsSecret});
     s3 = new AWS.S3();
 };
@@ -16,9 +17,9 @@ watch.config = function(c){
 
 var lastDate = null;
 
-function checkForNew(initial, cb){
+watch.checkForNew = function(initial, cb){
 
-    var hours = calcHours(config.hoursBack);
+    var hours = watch.calcHours(config.hoursBack);
     (function load(items, callback) {
         var loaded = new Array(items.length);
         var error;
@@ -38,16 +39,17 @@ function checkForNew(initial, cb){
 
         if(resultDate > lastDate){
             lastDate = resultDate;
-            console.log("new date:", lastDate);
-            //save date
+            watch.setLastDate(lastDate, function(e){
+                cb(err || e );
+            });
         }
-        cb(err);
+
     });
 }
 
 var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
 
-function calcHours(count){
+watch.calcHours = function(count){
     count = count || 24;
     var hours = Array.apply(null, Array(count));
     var now = new Date();
@@ -66,7 +68,7 @@ function calcHours(count){
     });
 
     return hours;
-}
+};
 
 function checkForNewByTime(date, initial, cb){
 
@@ -75,16 +77,14 @@ function checkForNewByTime(date, initial, cb){
                 Bucket:config.bucket};
 
     var newLastDate = lastDate;
-
     s3.listObjects(opts, function(err, data){
         if(err) return cb(err);
 
-        console.log('in ', date, 'we have: ', data.Contents.length);
-
         data.Contents.forEach(function(c){
             if(!initial && lastDate){
-                if(c.LastModified > lastDate)
+                if(c.LastModified > lastDate){
                     watch.push(c.Key+'\n');
+                }
             }else{
                 watch.push(c.Key+'\n');
             }
@@ -98,7 +98,7 @@ function checkForNewByTime(date, initial, cb){
     });
 }
 
-function getPrefixDir(markerPrefix){
+watch.getPrefixDir = function(markerPrefix){
     var prefixDir = markerPrefix;
     if(markerPrefix[markerPrefix.length-1] !== '/'){
         var segs = markerPrefix.split('/');
@@ -106,35 +106,32 @@ function getPrefixDir(markerPrefix){
         prefixDir = segs.join('/') + "/";
     }
     return prefixDir;
-}
+};
 
-function setLastDate(date){
+watch.setLastDate = function(date, cb){
     var opts = {Bucket:config.bucket,
                 Key:config.prefixDir+'.s3watcher',
-                Body:date.toUTCString()};
+                Body: (+date).toString()};
 
-  //  s3.putObject(opts, function(err, resp){
-   //     if(err) console.log(err);
-    //});
-}
+    s3.putObject(opts, function(err, resp){
+        cb(err);
+    });
+};
 
-function getLastDate(cb){
+watch.getLastDate = function(cb){
     var opts = {Bucket:config.bucket,
                 Key:config.prefixDir+'.s3watcher'};
 
     s3.getObject(opts, function(err, resp){
         if(err) return cb(err);
-
-        console.log(resp);
-
         try{
-            var lastDate = new Date(resp.Body);
+            var lastDate = new Date(parseInt(resp.Body.toString()));
             cb(err, lastDate);
         }catch(e){
             cb(e);
         }
     });
-}
+};
 
 
 
@@ -150,14 +147,13 @@ function start(){
     var init = true;
 
     var check = function(){
-
-        console.log('checking');
-
-        checkForNew(init, function(err){
-            setTimeout(check, 10000);
+        watch.getLastDate(function(err, date){
+            lastDate = date;
+            watch.checkForNew(init, function(err){
+                setTimeout(check, config.timeout);
+            });
+            init = false;
         });
-        init = false;
-
     };
     check();
 }
