@@ -4,7 +4,7 @@
   "description": "Watch an s3 bucket for new keys",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jshint index.js; foreman run mocha"
   },
   "author": {
     "name": "Mapbox",
