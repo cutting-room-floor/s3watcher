@@ -108,11 +108,3 @@ describe('s3watcher module', function() {
         });
     });
 });
-
-
-//s3watcher.pipe(process.stdout);
-
-
-//s3watcher.on('data', function(d){
-//    console.log(d.toString('utf8').split("\n"));
-//});
