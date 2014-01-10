@@ -1,6 +1,6 @@
 {
   "name": "s3watcher",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Watch an s3 bucket for new keys",
   "main": "index.js",
   "scripts": {
