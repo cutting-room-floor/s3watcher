@@ -17,14 +17,14 @@ watch.config = function(c){
 
 var lastDate = null;
 
-watch.checkForNew = function(initial, cb){
+watch.checkForNew = function(cb){
 
     var hours = watch.calcHours(config.hoursBack);
     (function load(items, callback) {
         var loaded = new Array(items.length);
         var error;
         items.forEach(function(item, i) {
-            checkForNewByTime(item, initial, function(err, obj) {
+            checkForNewByTime(item, function(err, obj) {
                 error = error || err;
                 loaded[i] = err || obj;
                 if (loaded.filter(function(n) { return n; }).length === loaded.length) {
@@ -36,12 +36,13 @@ watch.checkForNew = function(initial, cb){
         resultDate = results.reduce(function(a, b){
             return (a > b ? a : b);
         });
-
         if(resultDate > lastDate){
             lastDate = resultDate;
             watch.setLastDate(lastDate, function(e){
                 cb(err || e );
             });
+        }else{
+            cb(err);
         }
 
     });
@@ -70,7 +71,7 @@ watch.calcHours = function(count){
     return hours;
 };
 
-function checkForNewByTime(date, initial, cb){
+function checkForNewByTime(date,  cb){
 
     var opts = {Marker:config.markerPrefix+date,
                 Prefix:config.markerPrefix+date,
@@ -84,11 +85,7 @@ function checkForNewByTime(date, initial, cb){
             if(err) return cb(err);
 
             data.Contents.forEach(function(c){
-                if(!initial && lastDate){
-                    if(c.LastModified > lastDate){
-                        watch.push(c.Key+'\n');
-                    }
-                }else{
+                if(c.LastModified > lastDate){
                     watch.push(c.Key+'\n');
                 }
 
@@ -103,8 +100,9 @@ function checkForNewByTime(date, initial, cb){
                 else
                     opts.Marker = data.NextMarker;
                 fetch(opts);
-            }else
+            }else{
                 cb(err, newLastDate);
+            }
 
         });
     };
@@ -137,6 +135,7 @@ watch.getLastDate = function(cb){
 
     s3.getObject(opts, function(err, resp){
         if(err) return cb(err);
+
         try{
             var lastDate = new Date(parseInt(resp.Body.toString()));
             cb(err, lastDate);
@@ -157,15 +156,15 @@ watch._read = function(){
 };
 
 function start(){
-    var init = true;
-
     var check = function(){
         watch.getLastDate(function(err, date){
+            if(date === undefined)
+                date = +(new Date(1));
+
             lastDate = date;
-            watch.checkForNew(init, function(err){
+            watch.checkForNew(function(err){
                 setTimeout(check, config.timeout);
             });
-            init = false;
         });
     };
     check();

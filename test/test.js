@@ -1,5 +1,5 @@
 var assert = require("assert");
-var AWS = require ('aws-sdk');
+var AWS = require('aws-sdk');
 var s3watcher = require('../index.js')
 
 AWS.config.update({accessKeyId: process.env.AWS_KEY, secretAccessKey: process.env.AWS_SECRET});
