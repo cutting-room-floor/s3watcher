@@ -36,7 +36,7 @@ watch.checkForNew = function(cb){
         resultDate = results.reduce(function(a, b){
             return (a > b ? a : b);
         });
-        console.log(resultDate, lastDate)
+        console.log(resultDate, lastDate);
         if(resultDate > lastDate){
             lastDate = resultDate;
             watch.setLastDate(lastDate, function(e){

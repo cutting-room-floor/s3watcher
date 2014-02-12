@@ -13,7 +13,7 @@ var s3 = new AWS.S3();
 s3watcher.config({
     awsKey: env.AWS_KEY,
     awsSecret: env.AWS_SECRET,
-    markerPrefix: env.MARKER_PREFIX,
+    markerPrefix: 'tiles/asdfasdf.',
     bucket: env.BUCKET,
     hoursBack: 36,
     timeout: 1
