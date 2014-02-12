@@ -11,6 +11,7 @@ AWS.config.update({
 var s3 = new AWS.S3();
 
 s3watcher.config({
+    namespace: 'test',
     awsKey: env.AWS_KEY,
     awsSecret: env.AWS_SECRET,
     markerPrefix: 'tiles/asdfasdf.',
@@ -29,7 +30,7 @@ describe('s3watcher module', function() {
         var count = 0;
 
         var putOpts = {
-            Key: 'tiles/.s3watcher',
+            Key: 'tiles/asdfasdf./.test.s3watcher',
             Bucket: env.BUCKET,
             Body: twoHoursAgo.toString()
         };
@@ -114,7 +115,10 @@ describe('s3watcher module', function() {
         it("should save the last modified time", function(done){
             // check to make sure .s3watcher file is up to date
 
-            var getOpts = {Key: 'tiles/.s3watcher', Bucket:process.env.BUCKET};
+            var getOpts = {
+                Key: 'tiles/asdfasdf./.test.s3watcher',
+                Bucket: process.env.BUCKET
+            };
 
             s3.getObject(getOpts, function(err, resp){
                 assert.ifError(err);

@@ -1,13 +1,16 @@
+var path = require('path');
+var util = require('util');
 var AWS = require ('aws-sdk');
 var Readable = require('stream').Readable;
 
 module.exports = watch = new Readable();
 var config, s3;
 
-watch.config = function(c){
+watch.config = function(c) {
+    var namespace = c.namespace || 'default';
     config = c;
     config.timeout = config.timeout || 3e5;
-    config.prefixDir = watch.getPrefixDir(c.markerPrefix);
+    config.watchkey = path.join(c.markerPrefix, util.format('.%s.s3watcher', namespace));
     AWS.config.update({accessKeyId: c.awsKey, secretAccessKey: c.awsSecret});
     s3 = new AWS.S3();
 };
@@ -74,9 +77,11 @@ watch.calcHours = function(count){
 
 function checkForNewByTime(date,  cb){
 
-    var opts = {Marker:config.markerPrefix+date,
-                Prefix:config.markerPrefix+date,
-                Bucket:config.bucket};
+    var opts = {
+        Marker: config.markerPrefix+date,
+        Prefix: config.markerPrefix+date,
+        Bucket: config.bucket
+    };
 
     var newLastDate = lastDate;
 
@@ -112,28 +117,22 @@ function checkForNewByTime(date,  cb){
     fetch(opts);
 }
 
-watch.getPrefixDir = function(markerPrefix){
-    var prefixDir = markerPrefix;
-    if(markerPrefix[markerPrefix.length-1] !== '/'){
-        var segs = markerPrefix.split('/');
-        segs.pop();
-        prefixDir = segs.join('/') + "/";
-    }
-    return prefixDir;
-};
-
 watch.setLastDate = function(date, cb){
-    var opts = {Bucket:config.bucket,
-                Key:config.prefixDir+'.s3watcher',
-                Body: (+date).toString()};
+    var opts = {
+        Bucket: config.bucket,
+        Key: config.watchkey,
+        Body: (+date).toString()
+    };
     s3.putObject(opts, function(err, resp){
         cb(err);
     });
 };
 
 watch.getLastDate = function(cb){
-    var opts = {Bucket:config.bucket,
-                Key:config.prefixDir+'.s3watcher'};
+    var opts = {
+        Bucket: config.bucket,
+        Key: config.watchkey
+    };
 
     s3.getObject(opts, function(err, resp){
         if(err) return cb(err);
