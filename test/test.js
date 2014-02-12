@@ -1,17 +1,23 @@
 var assert = require("assert");
 var AWS = require('aws-sdk');
 var s3watcher = require('../index.js')
+var env = require('superenv')('s3watcher');
 
-AWS.config.update({accessKeyId: process.env.AWS_KEY, secretAccessKey: process.env.AWS_SECRET});
-s3 = new AWS.S3();
+AWS.config.update({
+    accessKeyId: env.AWS_KEY,
+    secretAccessKey: env.AWS_SECRET
+});
 
-s3watcher.config({awsKey:process.env.AWS_KEY,
-                  awsSecret:process.env.AWS_SECRET,
-                  markerPrefix: process.env.MARKER_PREFIX,
-                  bucket:process.env.BUCKET,
-                  hoursBack: 36,
-                  timeout: 1});
+var s3 = new AWS.S3();
 
+s3watcher.config({
+    awsKey: env.AWS_KEY,
+    awsSecret: env.AWS_SECRET,
+    markerPrefix: env.MARKER_PREFIX,
+    bucket: env.BUCKET,
+    hoursBack: 36,
+    timeout: 1
+});
 
 describe('s3watcher module', function() {
     var keys = [];
@@ -22,19 +28,27 @@ describe('s3watcher module', function() {
     before(function(done){
         var count = 0;
 
-        var putOpts = {Key: 'tiles/.s3watcher', Bucket: process.env.BUCKET, Body:""+twoHoursAgo};
+        var putOpts = {
+            Key: 'tiles/.s3watcher',
+            Bucket: env.BUCKET,
+            Body: twoHoursAgo.toString()
+        };
         keys.push(putOpts.Key);
         s3.putObject(putOpts, areWeDone);
 
         //.s3.amazonaws.com/{optional-prefix/}{distribution-ID}.{YYYY}-{MM}-{DD}-{HH}.{unique-ID}.gz
 
         hours.forEach(function(h){
-            putOpts = {Key: 'tiles/asdfasdf.' + h + '.12345.gz', Bucket: process.env.BUCKET};
+            putOpts = {
+                Key: 'tiles/asdfasdf.' + h + '.12345.gz',
+                Bucket: env.BUCKET
+            };
             keys.push(putOpts.Key);
             s3.putObject(putOpts, areWeDone);
         });
 
         function areWeDone(err){
+            assert.ifError(err);
             count +=1;
             if(count === keys.length)
                 done();
@@ -42,13 +56,15 @@ describe('s3watcher module', function() {
     });
 
 
-    after(function(done){
-
-        var delKeys = keys.map(function(k){
-            return {Key:k};
-        })
-
-        s3.deleteObjects({Bucket:process.env.BUCKET, Delete:{Objects:delKeys}}, done);
+    after(function(done) {
+        s3.deleteObjects({
+            Bucket: env.BUCKET,
+            Delete: {
+                Objects: keys.map(function(k){
+                    return {Key:k};
+                })
+            }
+        }, done);
     });
 
     describe('load s3 bucket', function() {
@@ -56,7 +72,7 @@ describe('s3watcher module', function() {
         it("should load the last read time", function(done){
             //load the last read timestamp from .s3watcher file
             s3watcher.getLastDate(function(err, date){
-                assert(!err);
+                assert.ifError(err);
                 assert.deepEqual(date, new Date(parseInt(twoHoursAgo)));
                 done();
             });
@@ -101,7 +117,7 @@ describe('s3watcher module', function() {
             var getOpts = {Key: 'tiles/.s3watcher', Bucket:process.env.BUCKET};
 
             s3.getObject(getOpts, function(err, resp){
-                assert(!err);
+                assert.ifError(err);
                 assert(parseInt(resp.Body) > twoHoursAgo);
                 done();
             });
