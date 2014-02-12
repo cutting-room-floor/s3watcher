@@ -1,4 +1,3 @@
-MARKER_PREFIX=<prefix to keys>
 AWS_KEY=<aws key>
 AWS_SECRET=<secret>
 BUCKET=<s3 bucket>
