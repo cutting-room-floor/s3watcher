@@ -14,7 +14,7 @@ s3watcher.config({
     namespace: 'test',
     awsKey: env.AWS_KEY,
     awsSecret: env.AWS_SECRET,
-    markerPrefix: 'tiles/asdfasdf.',
+    prefix: 'tiles/asdfasdf.',
     bucket: env.BUCKET,
     hoursBack: 36,
     timeout: 1

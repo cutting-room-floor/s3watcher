@@ -10,7 +10,7 @@ watch.config = function(c) {
     var namespace = c.namespace || 'default';
     config = c;
     config.timeout = config.timeout || 3e5;
-    config.watchkey = path.join(c.markerPrefix, util.format('.%s.s3watcher', namespace));
+    config.watchkey = path.join(c.prefix, util.format('.%s.s3watcher', namespace));
     AWS.config.update({accessKeyId: c.awsKey, secretAccessKey: c.awsSecret});
     s3 = new AWS.S3();
 };
@@ -78,8 +78,8 @@ watch.calcHours = function(count){
 function checkForNewByTime(date,  cb){
 
     var opts = {
-        Marker: config.markerPrefix+date,
-        Prefix: config.markerPrefix+date,
+        Marker: config.prefix+date,
+        Prefix: config.prefix+date,
         Bucket: config.bucket
     };
 
