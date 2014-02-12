@@ -126,7 +126,6 @@ watch.setLastDate = function(date, cb){
     var opts = {Bucket:config.bucket,
                 Key:config.prefixDir+'.s3watcher',
                 Body: (+date).toString()};
-
     s3.putObject(opts, function(err, resp){
         cb(err);
     });
@@ -162,8 +161,13 @@ watch._read = function(){
 function start(){
     var check = function(){
         watch.getLastDate(function(err, date){
-            if(date === undefined)
-                date = +(new Date(1));
+
+            console.log("last Date:", date)
+
+            if(date === undefined){
+                date = (new Date());
+                watch.setLastDate(date, function(){});
+            }
 
             lastDate = date;
             watch.checkForNew(function(err){
