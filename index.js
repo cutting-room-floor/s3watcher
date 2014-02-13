@@ -3,8 +3,9 @@ var util = require('util');
 var AWS = require ('aws-sdk');
 var Readable = require('stream').Readable;
 var debug = require('debug')('s3watcher');
+var queue = require('queue-async');
 
-module.exports = watch = new Readable();
+var watch = module.exports = new Readable();
 var config, s3;
 
 watch.config = function(c) {
@@ -22,19 +23,11 @@ watch.config = function(c) {
 function checkForNew(lastDate, cb) {
     debug('scanning last %s hour prefixes for keys added after %s', config.hoursBack || 24, lastDate);
     var hours = watch.calcHours(config.hoursBack);
-    (function load(items, callback) {
-        var loaded = new Array(items.length);
-        var error;
-        items.forEach(function(item, i) {
-            checkForNewByTime(item, lastDate, function(err, obj) {
-                error = error || err;
-                loaded[i] = err || obj;
-                if (loaded.filter(function(n) { return n; }).length === loaded.length) {
-                    callback(error, loaded);
-                }
-            });
-        });
-    })(hours, function(err, results) {
+    var q = queue();
+    hours.forEach(function(hour) {
+        q.defer(checkForNewByTime, hour, lastDate);
+    });
+    q.awaitAll(function(err, results) {
         if (err) return cb(err);
         var resultDate = results.reduce(function(a, b) {
             return (a > b ? a : b);
@@ -47,7 +40,6 @@ function checkForNew(lastDate, cb) {
         } else {
             cb(err);
         }
-
     });
 }
 
@@ -61,8 +53,7 @@ function checkForNewByTime(hour, lastDate, cb) {
 
     var newLastDate = lastDate;
 
-    var fetch = function(opts){
-
+    (function fetch(opts){
         s3.listObjects(opts, function(err, data){
             if(err) return cb(err);
 
@@ -92,8 +83,7 @@ function checkForNewByTime(hour, lastDate, cb) {
             }
 
         });
-    };
-    fetch(opts);
+    })(opts);
 }
 
 watch.setLastDate = function(date, cb){
@@ -135,8 +125,6 @@ watch.getLastDate = function(cb) {
         }
     });
 };
-
-
 
 var started = false;
 watch._read = function(){
