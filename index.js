@@ -2,6 +2,7 @@ var path = require('path');
 var util = require('util');
 var AWS = require ('aws-sdk');
 var Readable = require('stream').Readable;
+var debug = require('debug')('s3watcher');
 
 module.exports = watch = new Readable();
 var config, s3;
@@ -18,16 +19,14 @@ watch.config = function(c) {
 // Files from cloudfront look like this:
 // {bucket-name}.s3.amazonaws.com/{optional-prefix/}{distribution-ID}.{YYYY}-{MM}-{DD}-{HH}.{unique-ID}.gz
 
-var lastDate = null;
-
-watch.checkForNew = function(cb){
-
+function checkForNew(lastDate, cb) {
+    debug('scanning last %s hour prefixes for keys added after %s', config.hoursBack || 24, lastDate);
     var hours = watch.calcHours(config.hoursBack);
     (function load(items, callback) {
         var loaded = new Array(items.length);
         var error;
         items.forEach(function(item, i) {
-            checkForNewByTime(item, function(err, obj) {
+            checkForNewByTime(item, lastDate, function(err, obj) {
                 error = error || err;
                 loaded[i] = err || obj;
                 if (loaded.filter(function(n) { return n; }).length === loaded.length) {
@@ -36,25 +35,137 @@ watch.checkForNew = function(cb){
             });
         });
     })(hours, function(err, results) {
-        resultDate = results.reduce(function(a, b){
+        if (err) return cb(err);
+        var resultDate = results.reduce(function(a, b) {
             return (a > b ? a : b);
         });
-        console.log(resultDate, lastDate);
-        if(resultDate > lastDate){
+        if(resultDate > lastDate) {
             lastDate = resultDate;
             watch.setLastDate(lastDate, function(e){
-                cb(err || e );
+                cb(err || e);
             });
-        }else{
+        } else {
             cb(err);
         }
 
     });
+}
+
+function checkForNewByTime(hour, lastDate, cb) {
+
+    var opts = {
+        Marker: config.prefix + hour,
+        Prefix: config.prefix + hour,
+        Bucket: config.bucket
+    };
+
+    var newLastDate = lastDate;
+
+    var fetch = function(opts){
+
+        s3.listObjects(opts, function(err, data){
+            if(err) return cb(err);
+
+            var i = 0;
+            data.Contents.forEach(function(c) {
+                if (c.LastModified > lastDate) {
+                    watch.push(c.Key + '\n');
+                    i++;
+                }
+
+                if (c.LastModified > newLastDate) {
+                    newLastDate = c.LastModified;
+                }
+            });
+
+            debug('%d of %d keys with prefix %s were previously unseen', i, data.Contents.length, opts.Prefix);
+
+            if (data.IsTruncated) {
+                if(!data.NextMarker) {
+                    opts.Marker = data.Contents[data.Contents.length-1].Key;
+                } else {
+                    opts.Marker = data.NextMarker;
+                }
+                fetch(opts);
+            } else {
+                cb(err, newLastDate);
+            }
+
+        });
+    };
+    fetch(opts);
+}
+
+watch.setLastDate = function(date, cb){
+    debug('saving mtime %s to s3://%s/%s', date, config.bucket, config.watchkey);
+    var opts = {
+        Bucket: config.bucket,
+        Key: config.watchkey,
+        Body: (+date).toString()
+    };
+    s3.putObject(opts, cb);
 };
 
-var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+watch.getLastDate = function(cb) {
+    debug('loading mtime from s3://%s/%s', config.bucket, config.watchkey);
+    var opts = {
+        Bucket: config.bucket,
+        Key: config.watchkey
+    };
+
+    s3.getObject(opts, function(err, resp) {
+        if (err) {
+            if (err.code === 'NoSuchKey') {
+                var date = new Date();
+                debug('state file does not exist; creating it');
+                return watch.setLastDate(date, function(err) {
+                    if (err) return cb(err);
+                    return cb(null, date);
+                });
+            }
+            return cb(err);
+        }
+
+        try {
+            var lastDate = new Date(parseInt(resp.Body.toString()));
+            debug('parsed date %s', lastDate);
+            cb(null, lastDate);
+        } catch(e) {
+            cb(e);
+        }
+    });
+};
+
+
+
+var started = false;
+watch._read = function(){
+    debug('read');
+    if(!started) start();
+
+    started = true;
+    return true;
+};
+
+function start() {
+    debug('starting');
+    (function check() {
+        debug('checking');
+
+        watch.getLastDate(function(err, date){
+            if (err) return watch.emit('error', err);
+
+            checkForNew(date, function(err) {
+                if (err) return watch.emit('error', err);
+                debug('waiting for %d ms', config.timeout);
+                setTimeout(check, config.timeout);
+            });
+        });
+    })();
+}
 
 watch.calcHours = function(count){
+    var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
     count = count || 24;
     var hours = Array.apply(null, Array(count));
     var now = new Date();
@@ -74,105 +185,3 @@ watch.calcHours = function(count){
 
     return hours;
 };
-
-function checkForNewByTime(date,  cb){
-
-    var opts = {
-        Marker: config.prefix+date,
-        Prefix: config.prefix+date,
-        Bucket: config.bucket
-    };
-
-    var newLastDate = lastDate;
-
-    var fetch = function(opts){
-
-        s3.listObjects(opts, function(err, data){
-            if(err) return cb(err);
-
-            console.log("in ", opts.Prefix, " there are ", data.Contents.length);
-
-            data.Contents.forEach(function(c){
-                if(c.LastModified > lastDate){
-                    watch.push(c.Key+'\n');
-                }
-
-                if(c.LastModified > newLastDate)
-                    newLastDate = c.LastModified;
-            });
-
-
-            if(data.IsTruncated){
-                if(!data.NextMarker)
-                    opts.Marker = data.Contents[data.Contents.length-1].Key;
-                else
-                    opts.Marker = data.NextMarker;
-                fetch(opts);
-            }else{
-                cb(err, newLastDate);
-            }
-
-        });
-    };
-    fetch(opts);
-}
-
-watch.setLastDate = function(date, cb){
-    var opts = {
-        Bucket: config.bucket,
-        Key: config.watchkey,
-        Body: (+date).toString()
-    };
-    s3.putObject(opts, function(err, resp){
-        cb(err);
-    });
-};
-
-watch.getLastDate = function(cb){
-    var opts = {
-        Bucket: config.bucket,
-        Key: config.watchkey
-    };
-
-    s3.getObject(opts, function(err, resp){
-        if(err) return cb(err);
-
-        try{
-            var lastDate = new Date(parseInt(resp.Body.toString()));
-            console.log("got date: ", lastDate);
-            cb(err, lastDate);
-        }catch(e){
-            cb(e);
-        }
-    });
-};
-
-
-
-var started = false;
-watch._read = function(){
-    if(!started) start();
-
-    started = true;
-    return true;
-};
-
-function start(){
-    var check = function(){
-        watch.getLastDate(function(err, date){
-
-            console.log("last Date:", date)
-
-            if(date === undefined){
-                date = (new Date());
-                watch.setLastDate(date, function(){});
-            }
-
-            lastDate = date;
-            watch.checkForNew(function(err){
-                setTimeout(check, config.timeout);
-            });
-        });
-    };
-    check();
-}

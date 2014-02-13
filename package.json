@@ -13,6 +13,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "aws-sdk": "~2.0.0-rc4"
+    "aws-sdk": "~2.0.0-rc4",
+    "debug": "~0.7.4"
   }
 }
