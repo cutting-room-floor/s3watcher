@@ -20,21 +20,20 @@ watch.config = function(c) {
 // Files from cloudfront look like this:
 // {bucket-name}.s3.amazonaws.com/{optional-prefix/}{distribution-ID}.{YYYY}-{MM}-{DD}-{HH}.{unique-ID}.gz
 
-function checkForNew(lastDate, cb) {
-    debug('scanning last %s hour prefixes for keys added after %s', config.hoursBack || 24, lastDate);
-    var hours = watch.calcHours(config.hoursBack);
+function checkForNew(marker, mtime, cb) {
+    debug('scanning last %s hour prefixes for keys added after %s', config.hoursBack || 24, mtime);
+    var hours = watch.calcHours(config.hoursBack, keyDate(marker));
     var q = queue();
     hours.forEach(function(hour) {
-        q.defer(checkForNewByTime, hour, lastDate);
+        q.defer(checkForNewByTime, hour, mtime);
     });
     q.awaitAll(function(err, results) {
         if (err) return cb(err);
-        var resultDate = results.reduce(function(a, b) {
-            return (a > b ? a : b);
+        var state = results.reduce(function(a, b) {
+            return (a.mtime > b.mtime ? a : b);
         });
-        if(resultDate > lastDate) {
-            lastDate = resultDate;
-            watch.setLastDate(lastDate, function(e){
+        if (state.mtime > mtime) {
+            watch.saveState(state.marker, state.mtime, function(e) {
                 cb(err || e);
             });
         } else {
@@ -52,6 +51,7 @@ function checkForNewByTime(hour, lastDate, cb) {
     };
 
     var newLastDate = lastDate;
+    var marker;
 
     (function fetch(opts){
         s3.listObjects(opts, function(err, data){
@@ -66,6 +66,7 @@ function checkForNewByTime(hour, lastDate, cb) {
 
                 if (c.LastModified > newLastDate) {
                     newLastDate = c.LastModified;
+                    marker = c.Key;
                 }
             });
 
@@ -79,25 +80,26 @@ function checkForNewByTime(hour, lastDate, cb) {
                 }
                 fetch(opts);
             } else {
-                cb(err, newLastDate);
+                // Take newest marker and newest mtime. Don't need to be a pair.
+                cb(err, {mtime: newLastDate, marker: marker});
             }
 
         });
     })(opts);
 }
 
-watch.setLastDate = function(date, cb){
-    debug('saving mtime %s to s3://%s/%s', date, config.bucket, config.watchkey);
+watch.saveState = function(marker, mtime, cb){
+    debug('saving marker %s and mtime %d to s3://%s/%s', marker, mtime, config.bucket, config.watchkey);
     var opts = {
         Bucket: config.bucket,
         Key: config.watchkey,
-        Body: (+date).toString()
+        Body: [marker, (+mtime).toString()].join('\n')
     };
     s3.putObject(opts, cb);
 };
 
-watch.getLastDate = function(cb) {
-    debug('loading mtime from s3://%s/%s', config.bucket, config.watchkey);
+watch.loadState = function(cb) {
+    debug('loading state from s3://%s/%s', config.bucket, config.watchkey);
     var opts = {
         Bucket: config.bucket,
         Key: config.watchkey
@@ -106,20 +108,30 @@ watch.getLastDate = function(cb) {
     s3.getObject(opts, function(err, resp) {
         if (err) {
             if (err.code === 'NoSuchKey') {
-                var date = new Date();
-                debug('state file does not exist; creating it');
-                return watch.setLastDate(date, function(err) {
+                debug('state file does not exist; starting at the top');
+
+                return s3.listObjects({
+                    Prefix: config.prefix,
+                    Bucket: config.bucket
+                }, function(err, data) {
                     if (err) return cb(err);
-                    return cb(null, date);
+                    var marker = data.Contents[0].Key;
+                    var mtime = 0;
+                    watch.saveState(marker, 0, function(err) {
+                        if (err) return cb(err);
+                        return cb(null, marker, mtime);
+                    });
                 });
             }
             return cb(err);
         }
 
         try {
-            var lastDate = new Date(parseInt(resp.Body.toString()));
-            debug('parsed date %s', lastDate);
-            cb(null, lastDate);
+            var state = resp.Body.toString().split('\n');
+            var marker = state[0];
+            var mtime = new Date(parseInt(state[1]));
+            debug('parsed marker %s and mtime %d', marker, mtime);
+            cb(null, marker, mtime);
         } catch(e) {
             cb(e);
         }
@@ -140,10 +152,10 @@ function start() {
     (function check() {
         debug('checking');
 
-        watch.getLastDate(function(err, date){
+        watch.loadState(function(err, marker, mtime) {
             if (err) return watch.emit('error', err);
 
-            checkForNew(date, function(err) {
+            checkForNew(marker, mtime, function(err) {
                 if (err) return watch.emit('error', err);
                 debug('waiting for %d ms', config.timeout);
                 setTimeout(check, config.timeout);
@@ -152,13 +164,12 @@ function start() {
     })();
 }
 
-watch.calcHours = function(count){
+watch.calcHours = function(count, date) {
     var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
     count = count || 24;
     var hours = Array.apply(null, Array(count));
-    var now = new Date();
     hours = hours.map(function(_, i){
-        var d = new Date(now-36e5*(i+1));
+        var d = new Date(date - 36e5 * (i + -1));
 
         var dayOfMonth = d.getUTCDate()+'';
         if(dayOfMonth.length < 2)
@@ -173,3 +184,8 @@ watch.calcHours = function(count){
 
     return hours;
 };
+
+function keyDate(key) {
+    var datestr = key.split('.')[1].split('-');
+    return new Date(Date.UTC(datestr[0], datestr[1] - 1, datestr[2], datestr[3]));
+}
