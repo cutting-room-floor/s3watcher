@@ -9,175 +9,174 @@ var verbose = debug('s3watcher:verbose');
 var queue = require('queue-async');
 var LRU = require('lru-cache');
 
-var watch = module.exports = new Readable();
-var config, s3;
+var s3watcher = module.exports = function(options) {
+    options.namespace = options.namespace || 'default';
+    options.timeout = options.timeout || 3e5;
+    var statepath = path.join(options.prefix, util.format('.%s.s3watcher', options.namespace));
+    var markerpath = path.join(statepath, 'marker');
+    var emittedpath = path.join(statepath, 'emitted');
 
-watch.config = function(c) {
-    var namespace = c.namespace || 'default';
-    config = c;
-    config.timeout = config.timeout || 3e5;
-    config.state = path.join(c.prefix, util.format('.%s.s3watcher', namespace));
-    config.markerkey = path.join(config.state, 'marker');
-    config.processed = path.join(config.state, 'emitted');
-    AWS.config.update({accessKeyId: c.awsKey, secretAccessKey: c.awsSecret});
-    s3 = new AWS.S3();
+    log('marker persisted at %s', markerpath);
+    log('list of emitted keys persisted at %s', emittedpath);
 
-    log('marker persisted at %s', config.markerkey);
-    log('emitted persisted at %s', config.processed);
-};
+    var started = false;
+    var watcher = new Readable();
+    watcher._read = function(){
+        if(!started) start();
 
-watch.saveState = function(marker, callback){
-    log('saving marker %s to S3', marker);
-    s3.putObject({
-        Bucket: config.bucket,
-        Key: config.markerkey,
-        Body: marker
-    }, callback);
-};
-
-watch.loadState = function(callback) {
-    var opts = {
-        Bucket: config.bucket,
-        Key: config.markerkey
+        started = true;
+        return true;
     };
 
-    s3.getObject(opts, function(err, resp) {
-        if (err) {
-            if (err.code === 'NoSuchKey') {
-                log('state file does not exist; starting at the top');
+    AWS.config.update({
+        accessKeyId: options.awsKey,
+        secretAccessKey: options.awsSecret
+    });
+    var s3 = new AWS.S3();
 
-                return s3.listObjects({
-                    Prefix: config.prefix,
-                    Bucket: config.bucket,
-                    Delimiter: '/'
-                }, function(err, data) {
-                    if (err) return callback(err);
-                    var marker = data.Contents[0].Key;
-                    watch.saveState(marker, function(err) {
+    function saveState(marker, callback){
+        log('saving marker %s to S3', marker);
+        s3.putObject({
+            Bucket: options.bucket,
+            Key: markerpath,
+            Body: marker
+        }, callback);
+    }
+
+    function loadState(callback) {
+        var opts = {
+            Bucket: options.bucket,
+            Key: markerpath
+        };
+
+        s3.getObject(opts, function(err, resp) {
+            if (err) {
+                if (err.code === 'NoSuchKey') {
+                    log('state file does not exist; starting at the top');
+
+                    return s3.listObjects({
+                        Prefix: options.prefix,
+                        Bucket: options.bucket,
+                        Delimiter: '/'
+                    }, function(err, data) {
                         if (err) return callback(err);
-                        return callback(null, marker);
+                        var marker = data.Contents[0].Key;
+                        saveState(marker, function(err) {
+                            if (err) return callback(err);
+                            return callback(null, marker);
+                        });
                     });
-                });
+                }
+                return callback(err);
             }
-            return callback(err);
-        }
 
-        try {
             var marker = resp.Body.toString().trim();
             log('loaded marker %s from S3', marker);
             callback(null, marker);
-        } catch(e) {
-            callback(e);
-        }
-    });
-};
-
-var started = false;
-watch._read = function(){
-    if(!started) start();
-
-    started = true;
-    return true;
-};
-
-function start() {
-    log('starting');
-    (function check() {
-        log('checking');
-
-        watch.loadState(function(err, marker) {
-            if (err) return watch.emit('error', err);
-
-            marker = dateToKey(new Date(keyToDate(marker) - 864e5), config.prefix);
-
-            scan(marker, function(err) {
-                if (err) return watch.emit('error', err);
-                log('waiting for %d ms', config.timeout);
-                setTimeout(check, config.timeout);
-            });
         });
-    })();
-}
+    }
 
-// Scan a bucket starting at the given marker and call emit() on each key.
-function scan(marker, callback) {
-    (function fetch(opts){
-        log('list objects starting with marker %s', opts.Marker);
-        s3.listObjects(opts, function(err, data){
-            if (err) return callback(err);
-            if (!data.Contents.length) return callback();
+    function start() {
+        log('starting');
+        (function check() {
+            log('checking');
 
-            var q = queue(10);
-            var emitted = 0;
-            _(data.Contents).each(function(obj) {
-                if (obj.Key.indexOf('.s3watcher') !== -1) return
-                q.defer(function(callback) {
-                    emit(obj.Key, function(err, e) {
-                        if (e) emitted++;
-                        callback(err, e);
+            loadState(function(err, marker) {
+                if (err) return s3watcher.emit('error', err);
+
+                marker = dateToKey(new Date(keyToDate(marker) - 864e5), options.prefix);
+
+                scan(marker, function(err) {
+                    if (err) return s3watcher.emit('error', err);
+                    log('waiting for %d ms', options.timeout);
+                    setTimeout(check, options.timeout);
+                });
+            });
+        })();
+    }
+
+    // Scan a bucket starting at the given marker and call emit() on each key.
+    function scan(marker, callback) {
+        (function fetch(opts){
+            log('list objects starting with marker %s', opts.Marker);
+            s3.listObjects(opts, function(err, data){
+                if (err) return callback(err);
+                if (!data.Contents.length) return callback();
+
+                var q = queue(10);
+                var emitted = 0;
+                _(data.Contents).each(function(obj) {
+                    if (obj.Key.indexOf('.s3watcher') !== -1) return
+                    q.defer(function(callback) {
+                        emit(obj.Key, function(err, e) {
+                            if (e) emitted++;
+                            callback(err, e);
+                        });
+                    });
+                });
+                q.awaitAll(function(err) {
+                    if (err) return callback(err);
+
+                    log('emitted %d of %d keys', emitted, data.Contents.length);
+
+                    saveState(_(data.Contents).last().Key, function(err) {
+                        if (err) return callback(err);
+                        if (data.IsTruncated) {
+                            opts.Marker = _(data.Contents).last().Key;
+                            fetch(opts);
+                        } else {
+                            callback();
+                        }
                     });
                 });
             });
-            q.awaitAll(function(err) {
+        })({
+            Marker: marker,
+            Prefix: options.prefix,
+            Bucket: options.bucket
+        });
+    }
+
+    var emitted = LRU({
+        max: 25000,
+        dispose: function() {
+            verbose('disposed cache object');
+        }
+    });
+
+    // Emit a key if it hasn't been emitted before.
+    function emit(key, callback) {
+
+        // Check for key in local cache before checking S3. Don't emit if it's there.
+        if (emitted.get(key)) return callback();
+
+        var opts = {
+            Bucket: options.bucket,
+            Key: path.join(emittedpath, key)
+        };
+
+        s3.headObject(opts, function(err, data) {
+            if (err && err.code !== 'NotFound') return callback(err);
+
+            // Don't emit key if is has been emitted before. Set key in local cache
+            // so we don't need to HEAD S3 next time.
+            if (!err) {
+                emitted.set(key, true);
+                return callback();
+            }
+
+            // Emit the key and record it was emitted in S3 and the local cache.
+            s3.putObject(opts, function(err) {
                 if (err) return callback(err);
-
-                log('emitted %d of %d keys', emitted, data.Contents.length);
-
-                watch.saveState(_(data.Contents).last().Key, function(err) {
-                    if (err) return callback(err);
-                    if (data.IsTruncated) {
-                        opts.Marker = _(data.Contents).last().Key;
-                        fetch(opts);
-                    } else {
-                        callback();
-                    }
-                });
+                emitted.set(key, true);
+                watcher.push(key + '\n');
+                callback(null, true);
             });
         });
-    })({
-        Marker: marker,
-        Prefix: config.prefix,
-        Bucket: config.bucket
-    });
-}
-
-var emitted = LRU({
-    max: 25000,
-    dispose: function() {
-        verbose('disposed cache object');
     }
-});
 
-// Emit a key if it hasn't been emitted before.
-function emit(key, callback) {
-
-    // Check for key in local cache before checking S3. Don't emit if it's there.
-    if (emitted.get(key)) return callback();
-
-    var opts = {
-        Bucket: config.bucket,
-        Key: path.join(config.processed, key)
-    };
-
-    s3.headObject(opts, function(err, data) {
-        if (err && err.code !== 'NotFound') return callback(err);
-
-        // Don't emit key if is has been emitted before. Set key in local cache
-        // so we don't need to HEAD S3 next time.
-        if (!err) {
-            emitted.set(key, true);
-            return callback();
-        }
-
-        // Emit the key and record it was emitted in S3 and the local cache.
-        s3.putObject(opts, function(err) {
-            if (err) return callback(err);
-            emitted.set(key, true);
-            watch.push(key + '\n');
-            callback(null, true);
-        });
-    });
-}
+    return watcher;
+};
 
 // Convert a key into a JavaScript Date object.
 function keyToDate(key) {

@@ -14,20 +14,20 @@ It's a node module so install with npm:
 
     var s3watcher = require('s3watcher')
 
-    s3watcher.config({
+    var watcher = s3watcher({
         awsKey: 'xxxx',
         awsSecret: 'xxxx',
         bucket: 'bucketname',
         prefix: 'foobar/baz',
-        handle: 'foobar',
+        namespace: 'foobar',
     });
 
-    s3watcher.pipe(process.stdout);
+    watcher.pipe(process.stdout);
 
 - `awsKey` and `awsSecret` (both required) are obviously your AWS credentials
 - `bucket` (required) the name of the S3 bucket to watch
 - `prefix` (defaults to '') is the prefix to watch
-- `handle` (defaults to 'default') is a unique string that allows you to run
+- `namespace` (defaults to 'default') is a unique string that allows you to run
   multiple watcher instances against the same bucket and prefix pair.
 
 ### Tests
