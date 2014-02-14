@@ -16,7 +16,7 @@ watch.config = function(c) {
     config.timeout = config.timeout || 3e5;
     config.state = path.join(c.prefix, util.format('.%s.s3watcher', namespace));
     config.watchkey = path.join(config.state, 'state');
-    config.processed = path.join(config.state, 'processed');
+    config.processed = path.join(config.state, 'emitted');
     AWS.config.update({accessKeyId: c.awsKey, secretAccessKey: c.awsSecret});
     s3 = new AWS.S3();
 };
@@ -93,6 +93,7 @@ function start() {
     })();
 }
 
+// Scan a bucket starting at the given marker and call emit() on each key.
 function scan(marker, callback) {
     debug('scanning at %s for keys', marker);
 
@@ -135,53 +136,70 @@ function scan(marker, callback) {
     });
 }
 
-var cache = LRU({
+var emitted = LRU({
     max: 24000,
     dispose: function() {
         debug('disposed cache object');
     }
 });
 
+// Emit a key if it hasn't been emitted before.
 function emit(key, callback) {
-    var processed = cache.get(key);
-    if (processed) return callback();
+
+    // Check for key in local cache before checking S3. Don't emit if it's there.
+    if (emitted.get(key)) return callback();
 
     var opts = {
         Bucket: config.bucket,
         Key: path.join(config.processed, key)
     };
+
     s3.headObject(opts, function(err, data) {
         if (err && err.code !== 'NotFound') return callback(err);
+
+        // Don't emit key if is has been emitted before. Set key in local cache
+        // so we don't need to HEAD S3 next time.
         if (!err) {
-            cache.set(key, true);
+            emitted.set(key, true);
             return callback();
         }
+
+        // Emit the key and record it was emitted in S3 and the local cache.
         s3.putObject(opts, function(err) {
             if (err) return callback(err);
             watch.push(key + '\n');
-            cache.set(key, true);
+            emitted.set(key, true);
             callback();
         });
     });
 }
 
+// Convert a key into a JavaScript Date object.
 function keyToDate(key) {
     var datestr = key.split('.')[1].split('-');
     return new Date(Date.UTC(datestr[0], datestr[1] - 1, datestr[2], datestr[3]));
 }
 
+// Convert a JavaScript Date object and S3 prefix into a key suitable for use
+// as a marker.
 function dateToKey(d, prefix) {
     prefix = prefix || '';
-    var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
-    var dayOfMonth = d.getUTCDate()+'';
-    if(dayOfMonth.length < 2) {
+
+    var dayOfMonth = d.getUTCDate().toString();
+    if (dayOfMonth.length < 2) {
         dayOfMonth = '0' + dayOfMonth;
     }
 
-    var hour = d.getUTCHours()+'';
-    if(hour.length < 2) {
+    var hour = d.getUTCHours().toString()+'';
+    if (hour.length < 2) {
         hour = '0' + hour;
     }
 
-    return util.format('%s%s-%s-%s-%s', prefix, d.getUTCFullYear(), months[d.getUTCMonth()], dayOfMonth, hour);
+    var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+    return util.format('%s%s-%s-%s-%s',
+        prefix,
+        d.getUTCFullYear(),
+        months[d.getUTCMonth()],
+        dayOfMonth,
+        hour);
 }
