@@ -1,3 +1,4 @@
+var _ = require('underscore');
 var path = require('path');
 var util = require('util');
 var AWS = require ('aws-sdk');
@@ -16,77 +17,6 @@ watch.config = function(c) {
     AWS.config.update({accessKeyId: c.awsKey, secretAccessKey: c.awsSecret});
     s3 = new AWS.S3();
 };
-
-// Files from cloudfront look like this:
-// {bucket-name}.s3.amazonaws.com/{optional-prefix/}{distribution-ID}.{YYYY}-{MM}-{DD}-{HH}.{unique-ID}.gz
-
-function checkForNew(marker, mtime, cb) {
-    debug('scanning last %s hour prefixes for keys added after %s', config.hoursBack || 24, mtime);
-    var hours = watch.calcHours(config.hoursBack, keyDate(marker));
-    var q = queue();
-    hours.forEach(function(hour) {
-        q.defer(checkForNewByTime, hour, mtime);
-    });
-    q.awaitAll(function(err, results) {
-        if (err) return cb(err);
-        var state = results.reduce(function(a, b) {
-            return (a.mtime > b.mtime ? a : b);
-        });
-        if (state.mtime > mtime) {
-            watch.saveState(state.marker, state.mtime, function(e) {
-                cb(err || e);
-            });
-        } else {
-            cb(err);
-        }
-    });
-}
-
-function checkForNewByTime(hour, lastDate, cb) {
-
-    var opts = {
-        Marker: config.prefix + hour,
-        Prefix: config.prefix + hour,
-        Bucket: config.bucket
-    };
-
-    var newLastDate = lastDate;
-    var marker;
-
-    (function fetch(opts){
-        s3.listObjects(opts, function(err, data){
-            if(err) return cb(err);
-
-            var i = 0;
-            data.Contents.forEach(function(c) {
-                if (c.LastModified > lastDate) {
-                    watch.push(c.Key + '\n');
-                    i++;
-                }
-
-                if (c.LastModified > newLastDate) {
-                    newLastDate = c.LastModified;
-                    marker = c.Key;
-                }
-            });
-
-            debug('%d of %d keys with prefix %s were previously unseen', i, data.Contents.length, opts.Prefix);
-
-            if (data.IsTruncated) {
-                if(!data.NextMarker) {
-                    opts.Marker = data.Contents[data.Contents.length-1].Key;
-                } else {
-                    opts.Marker = data.NextMarker;
-                }
-                fetch(opts);
-            } else {
-                // Take newest marker and newest mtime. Don't need to be a pair.
-                cb(err, {mtime: newLastDate, marker: marker});
-            }
-
-        });
-    })(opts);
-}
 
 watch.saveState = function(marker, mtime, cb){
     debug('saving marker %s and mtime %d to s3://%s/%s', marker, mtime, config.bucket, config.watchkey);
@@ -140,7 +70,6 @@ watch.loadState = function(cb) {
 
 var started = false;
 watch._read = function(){
-    debug('read');
     if(!started) start();
 
     started = true;
@@ -155,7 +84,7 @@ function start() {
         watch.loadState(function(err, marker, mtime) {
             if (err) return watch.emit('error', err);
 
-            checkForNew(marker, mtime, function(err) {
+            scan(marker, mtime, function(err) {
                 if (err) return watch.emit('error', err);
                 debug('waiting for %d ms', config.timeout);
                 setTimeout(check, config.timeout);
@@ -164,28 +93,63 @@ function start() {
     })();
 }
 
-watch.calcHours = function(count, date) {
-    var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
-    count = count || 24;
-    var hours = Array.apply(null, Array(count));
-    hours = hours.map(function(_, i){
-        var d = new Date(date - 36e5 * (i + -1));
+function scan(marker, mtime, callback) {
+    debug('scanning starting at %s for keys created after %s', marker, mtime);
 
-        var dayOfMonth = d.getUTCDate()+'';
-        if(dayOfMonth.length < 2)
-            dayOfMonth = '0'+dayOfMonth;
+    (function fetch(opts){
+        debug('list objects starting with marker %s ', opts.Marker);
+        s3.listObjects(opts, function(err, data){
+            if (err) return callback(err);
+            if (!data.Contents.length) return callback();
 
-        var hour = d.getUTCHours()+'';
-        if(hour.length < 2)
-            hour = '0'+hour;
+            _(data.Contents).each(function(obj) {
+                watch.push(obj.Key + '\n');
+            });
 
-        return d.getUTCFullYear()+'-'+months[d.getUTCMonth()]+'-'+dayOfMonth+'-'+hour;
+            if (+keyToDate(marker) > Date.now() - 864e5) {
+                var oldmarker = marker;
+                marker = dateToKey(new Date(Date.now() - 864e5), config.prefix);
+                debug('marker %s less than 24 hour old; using %s instead', oldmarker, marker);
+            } else {
+                marker = _(data.Contents).last().Key;
+            }
+
+            mtime = new Date(_(data.Contents).max(function(obj) {
+                return +new Date(obj.LastModified);
+            }).LastModified);
+            watch.saveState(marker, mtime, function(err) {
+                if (data.IsTruncated) {
+                    opts.Marker = _(data.Contents).last().Key;
+                    fetch(opts);
+                } else {
+                    callback();
+                }
+            });
+        });
+    })({
+        Marker: marker,
+        Prefix: config.prefix,
+        Bucket: config.bucket
     });
+}
 
-    return hours;
-};
-
-function keyDate(key) {
+function keyToDate(key) {
     var datestr = key.split('.')[1].split('-');
     return new Date(Date.UTC(datestr[0], datestr[1] - 1, datestr[2], datestr[3]));
+}
+
+function dateToKey(d, prefix) {
+    prefix = prefix || '';
+    var months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+    var dayOfMonth = d.getUTCDate()+'';
+    if(dayOfMonth.length < 2) {
+        dayOfMonth = '0' + dayOfMonth;
+    }
+
+    var hour = d.getUTCHours()+'';
+    if(hour.length < 2) {
+        hour = '0' + hour;
+    }
+
+    return util.format('%s%s-%s-%s-%s', prefix, d.getUTCFullYear(), months[d.getUTCMonth()], dayOfMonth, hour);
 }
