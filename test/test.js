@@ -10,16 +10,6 @@ AWS.config.update({
 
 var s3 = new AWS.S3();
 
-//s3watcher.config({
-//    namespace: 'test',
-//    awsKey: env.AWS_KEY,
-//    awsSecret: env.AWS_SECRET,
-//    prefix: 'tiles/asdfasdf.',
-//    bucket: env.BUCKET,
-//    hoursBack: 36,
-//    timeout: 1
-//});
-
 describe('s3watcher', function() {
     describe('keyToDate', function() {
         it('should convert a key to a Date object', function() {
