@@ -17,29 +17,28 @@ watch.config = function(c) {
     config = c;
     config.timeout = config.timeout || 3e5;
     config.state = path.join(c.prefix, util.format('.%s.s3watcher', namespace));
-    config.watchkey = path.join(config.state, 'state');
+    config.markerkey = path.join(config.state, 'marker');
     config.processed = path.join(config.state, 'emitted');
     AWS.config.update({accessKeyId: c.awsKey, secretAccessKey: c.awsSecret});
     s3 = new AWS.S3();
 
-    log('saving marker at %s', config.watchkey);
-    log('saving processed at %s', config.processed);
+    log('marker persisted at %s', config.markerkey);
+    log('emitted persisted at %s', config.processed);
 };
 
 watch.saveState = function(marker, callback){
-    log('saving marker to S3');
+    log('saving marker %s to S3', marker);
     s3.putObject({
         Bucket: config.bucket,
-        Key: config.watchkey,
+        Key: config.markerkey,
         Body: marker
     }, callback);
 };
 
 watch.loadState = function(callback) {
-    log('loading marker from S3');
     var opts = {
         Bucket: config.bucket,
-        Key: config.watchkey
+        Key: config.markerkey
     };
 
     s3.getObject(opts, function(err, resp) {
@@ -65,7 +64,7 @@ watch.loadState = function(callback) {
 
         try {
             var marker = resp.Body.toString().trim();
-            log('parsed marker %s', marker);
+            log('loaded marker %s from S3', marker);
             callback(null, marker);
         } catch(e) {
             callback(e);
