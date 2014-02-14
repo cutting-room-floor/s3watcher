@@ -5,6 +5,7 @@ var AWS = require ('aws-sdk');
 var Readable = require('stream').Readable;
 var debug = require('debug')('s3watcher');
 var queue = require('queue-async');
+var LRU = require('lru-cache');
 
 var watch = module.exports = new Readable();
 var config, s3;
@@ -13,22 +14,23 @@ watch.config = function(c) {
     var namespace = c.namespace || 'default';
     config = c;
     config.timeout = config.timeout || 3e5;
-    config.watchkey = path.join(c.prefix, util.format('.%s.s3watcher', namespace));
+    config.state = path.join(c.prefix, util.format('.%s.s3watcher', namespace));
+    config.watchkey = path.join(config.state, 'state');
+    config.processed = path.join(config.state, 'processed');
     AWS.config.update({accessKeyId: c.awsKey, secretAccessKey: c.awsSecret});
     s3 = new AWS.S3();
 };
 
-watch.saveState = function(marker, mtime, cb){
-    debug('saving marker %s and mtime %d to s3://%s/%s', marker, mtime, config.bucket, config.watchkey);
-    var opts = {
+watch.saveState = function(marker, callback){
+    debug('saving marker %s to s3://%s/%s', marker, config.bucket, config.watchkey);
+    s3.putObject({
         Bucket: config.bucket,
         Key: config.watchkey,
-        Body: [marker, (+mtime).toString()].join('\n')
-    };
-    s3.putObject(opts, cb);
+        Body: marker
+    }, callback);
 };
 
-watch.loadState = function(cb) {
+watch.loadState = function(callback) {
     debug('loading state from s3://%s/%s', config.bucket, config.watchkey);
     var opts = {
         Bucket: config.bucket,
@@ -42,28 +44,26 @@ watch.loadState = function(cb) {
 
                 return s3.listObjects({
                     Prefix: config.prefix,
-                    Bucket: config.bucket
+                    Bucket: config.bucket,
+                    Delimiter: '/'
                 }, function(err, data) {
-                    if (err) return cb(err);
+                    if (err) return callback(err);
                     var marker = data.Contents[0].Key;
-                    var mtime = 0;
                     watch.saveState(marker, 0, function(err) {
-                        if (err) return cb(err);
-                        return cb(null, marker, mtime);
+                        if (err) return callback(err);
+                        return callback(null, marker);
                     });
                 });
             }
-            return cb(err);
+            return callback(err);
         }
 
         try {
-            var state = resp.Body.toString().split('\n');
-            var marker = state[0];
-            var mtime = new Date(parseInt(state[1]));
-            debug('parsed marker %s and mtime %d', marker, mtime);
-            cb(null, marker, mtime);
+            var marker = resp.Body.toString();
+            debug('parsed marker %s', marker);
+            callback(null, marker);
         } catch(e) {
-            cb(e);
+            callback(e);
         }
     });
 };
@@ -81,10 +81,10 @@ function start() {
     (function check() {
         debug('checking');
 
-        watch.loadState(function(err, marker, mtime) {
+        watch.loadState(function(err, marker) {
             if (err) return watch.emit('error', err);
 
-            scan(marker, mtime, function(err) {
+            scan(marker, function(err) {
                 if (err) return watch.emit('error', err);
                 debug('waiting for %d ms', config.timeout);
                 setTimeout(check, config.timeout);
@@ -93,43 +93,75 @@ function start() {
     })();
 }
 
-function scan(marker, mtime, callback) {
-    debug('scanning starting at %s for keys created after %s', marker, mtime);
+function scan(marker, callback) {
+    debug('scanning at %s for keys', marker);
 
     (function fetch(opts){
-        debug('list objects starting with marker %s ', opts.Marker);
+        debug('list objects starting with marker %s', opts.Marker);
         s3.listObjects(opts, function(err, data){
             if (err) return callback(err);
             if (!data.Contents.length) return callback();
 
+            var q = queue(10);
             _(data.Contents).each(function(obj) {
-                watch.push(obj.Key + '\n');
+                if (obj.Key.indexOf('.s3watcher') !== -1) return
+                q.defer(emit, obj.Key);
             });
+            q.awaitAll(function(err) {
+                if (err) return callback(err);
 
-            if (+keyToDate(marker) > Date.now() - 864e5) {
-                var oldmarker = marker;
-                marker = dateToKey(new Date(Date.now() - 864e5), config.prefix);
-                debug('marker %s less than 24 hour old; using %s instead', oldmarker, marker);
-            } else {
-                marker = _(data.Contents).last().Key;
-            }
-
-            mtime = new Date(_(data.Contents).max(function(obj) {
-                return +new Date(obj.LastModified);
-            }).LastModified);
-            watch.saveState(marker, mtime, function(err) {
-                if (data.IsTruncated) {
-                    opts.Marker = _(data.Contents).last().Key;
-                    fetch(opts);
+                if (+keyToDate(marker) > Date.now() - 864e5) {
+                    var oldmarker = marker;
+                    marker = dateToKey(new Date(Date.now() - 864e5), config.prefix);
+                    debug('marker %s less than 24 hour old; using %s instead', oldmarker, marker);
                 } else {
-                    callback();
+                    marker = _(data.Contents).last().Key;
                 }
+
+                watch.saveState(marker, function(err) {
+                    if (data.IsTruncated) {
+                        opts.Marker = _(data.Contents).last().Key;
+                        fetch(opts);
+                    } else {
+                        callback();
+                    }
+                });
             });
         });
     })({
         Marker: marker,
         Prefix: config.prefix,
         Bucket: config.bucket
+    });
+}
+
+var cache = LRU({
+    max: 24000,
+    dispose: function() {
+        debug('disposed cache object');
+    }
+});
+
+function emit(key, callback) {
+    var processed = cache.get(key);
+    if (processed) return callback();
+
+    var opts = {
+        Bucket: config.bucket,
+        Key: path.join(config.processed, key)
+    };
+    s3.headObject(opts, function(err, data) {
+        if (err && err.code !== 'NotFound') return callback(err);
+        if (!err) {
+            cache.set(key, true);
+            return callback();
+        }
+        s3.putObject(opts, function(err) {
+            if (err) return callback(err);
+            watch.push(key + '\n');
+            cache.set(key, true);
+            callback();
+        });
     });
 }
 
