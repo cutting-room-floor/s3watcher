@@ -10,121 +10,63 @@ AWS.config.update({
 
 var s3 = new AWS.S3();
 
-s3watcher.config({
-    namespace: 'test',
-    awsKey: env.AWS_KEY,
-    awsSecret: env.AWS_SECRET,
-    prefix: 'tiles/asdfasdf.',
-    bucket: env.BUCKET,
-    hoursBack: 36,
-    timeout: 1
-});
+//s3watcher.config({
+//    namespace: 'test',
+//    awsKey: env.AWS_KEY,
+//    awsSecret: env.AWS_SECRET,
+//    prefix: 'tiles/asdfasdf.',
+//    bucket: env.BUCKET,
+//    hoursBack: 36,
+//    timeout: 1
+//});
 
-describe('s3watcher module', function() {
-    var keys = [];
-    var twoHoursAgo = (+new Date) - 2 * 36e5;
-    var hours = s3watcher.calcHours(3);
-    var newKey = "";
-    this.timeout(15000);
-    before(function(done){
-        var count = 0;
+describe('s3watcher', function() {
+    describe('keyToDate', function() {
+        it('should convert a key to a Date object', function() {
+            assert.equal(+s3watcher.keyToDate('test/EJ123456.2014-02-14-22'), 1392415200000);
+        });
+    });
+    describe('dateToKey', function() {
+        it('should convert a Date object to a key', function() {
+            assert.equal(s3watcher.dateToKey(new Date(1392415207053)), '2014-02-14-22');
+        });
+        it('should convert a Date object to a key with a prefix', function() {
+            assert.equal(s3watcher.dateToKey(new Date(1392415207053), 'test/EJ123456.'), 'test/EJ123456.2014-02-14-22');
+        });
+    });
 
-        var putOpts = {
-            Key: 'tiles/asdfasdf./.test.s3watcher',
-            Bucket: env.BUCKET,
-            Body: twoHoursAgo.toString()
-        };
-        keys.push(putOpts.Key);
-        s3.putObject(putOpts, areWeDone);
-
-        //.s3.amazonaws.com/{optional-prefix/}{distribution-ID}.{YYYY}-{MM}-{DD}-{HH}.{unique-ID}.gz
-
-        hours.forEach(function(h){
-            putOpts = {
-                Key: 'tiles/asdfasdf.' + h + '.12345.gz',
-                Bucket: env.BUCKET
+    describe('', function() {
+        this.timeout(10000);
+        it('should start on a clean bucket and detect new keys', function(done) {
+            var options = {
+                namespace: 'test',
+                awsKey: env.AWS_KEY,
+                awsSecret: env.AWS_SECRET,
+                bucket: env.BUCKET,
+                prefix: 'tiles/asdfasdf' + Date.now() + '.',
+                timeout: 1000
             };
-            keys.push(putOpts.Key);
-            s3.putObject(putOpts, areWeDone);
-        });
+            var watcher = s3watcher(options);
+            watcher.once('data', function(chunk) {
+                assert.equal(chunk.toString(), s3watcher.dateToKey(new Date(1392415207053), options.prefix) + '\n');
 
-        function areWeDone(err){
-            assert.ifError(err);
-            count +=1;
-            if(count === keys.length)
-                done();
-        }
-    });
-
-
-    after(function(done) {
-        s3.deleteObjects({
-            Bucket: env.BUCKET,
-            Delete: {
-                Objects: keys.map(function(k){
-                    return {Key:k};
-                })
-            }
-        }, done);
-    });
-
-    describe('load s3 bucket', function() {
-
-        it("should load the last read time", function(done){
-            //load the last read timestamp from .s3watcher file
-            s3watcher.getLastDate(function(err, date){
-                assert.ifError(err);
-                assert.deepEqual(date, new Date(parseInt(twoHoursAgo)));
-                done();
-            });
-        });
-
-        it("should stream newer keys", function(done){
-            // get keys that were already in the bucket
-            var streamKeys = []
-            s3watcher.on('data', function(d){
-
-                streamKeys.push(d.toString('utf8').split("\n")[0]);
-                if(streamKeys.length === 3){
-                    assert(streamKeys.indexOf(keys[1]) !== -1);
-                    assert(streamKeys.indexOf(keys[2]) !== -1);
-                    assert(streamKeys.indexOf(keys[3]) !== -1);
-
-
-                    // this is a quite a hack, but I only want this to happen after this test..
-                    putOpts = {Key: 'tiles/asdfasdf.' + hours[0] + '.12346.gz', Bucket: process.env.BUCKET};
-                    newKey = putOpts.Key;
-                    keys.push(putOpts.Key);
-                    s3.putObject(putOpts, function(){});
+                watcher.once('data', function(chunk) {
+                    assert.equal(chunk.toString(), s3watcher.dateToKey(new Date(1392501607053), options.prefix) + '\n');
                     done();
-                }
+                });
+
+                s3.putObject({
+                    Bucket: options.bucket,
+                    Key: s3watcher.dateToKey(new Date(1392501607053), options.prefix)
+                }, assert.ifError);
             });
-        });
-    });
-    describe("watch for new keys", function(){
-        it("should stream new keys when they are added", function(done){
-            // add some keys
-
-            s3watcher.on('data', function(d){
-
-                assert.equal(newKey, d.toString('utf8').split("\n")[0]);
-                done();
-            });
-        });
-
-        it("should save the last modified time", function(done){
-            // check to make sure .s3watcher file is up to date
-
-            var getOpts = {
-                Key: 'tiles/asdfasdf./.test.s3watcher',
-                Bucket: process.env.BUCKET
-            };
-
-            s3.getObject(getOpts, function(err, resp){
-                assert.ifError(err);
-                assert(parseInt(resp.Body) > twoHoursAgo);
-                done();
-            });
+            // Delay first put to make sure start up is clean with a blank bucket.
+            setTimeout(function() {
+                s3.putObject({
+                    Bucket: options.bucket,
+                    Key: s3watcher.dateToKey(new Date(1392415207053), options.prefix)
+                }, assert.ifError);
+            }, 2000);
         });
     });
 });
