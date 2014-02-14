@@ -21,9 +21,8 @@ var s3watcher = module.exports = function(options) {
 
     var started = false;
     var watcher = new Readable();
-    watcher._read = function(){
-        if(!started) start();
-
+    watcher._read = function() {
+        if (!started) start();
         started = true;
         return true;
     };
@@ -60,7 +59,7 @@ var s3watcher = module.exports = function(options) {
                         Delimiter: '/'
                     }, function(err, data) {
                         if (err) return callback(err);
-                        var marker = data.Contents[0].Key;
+                        var marker = data.Contents[0]? data.Contents[0].Key : '0';
                         saveState(marker, function(err) {
                             if (err) return callback(err);
                             return callback(null, marker);
@@ -82,12 +81,14 @@ var s3watcher = module.exports = function(options) {
             log('checking');
 
             loadState(function(err, marker) {
-                if (err) return s3watcher.emit('error', err);
+                if (err) return watcher.emit('error', err);
 
-                marker = dateToKey(new Date(keyToDate(marker) - 864e5), options.prefix);
+                if (marker !== '0') {
+                    marker = s3watcher.dateToKey(new Date(s3watcher.keyToDate(marker) - 864e5), options.prefix);
+                }
 
                 scan(marker, function(err) {
-                    if (err) return s3watcher.emit('error', err);
+                    if (err) return watcher.emit('error', err);
                     log('waiting for %d ms', options.timeout);
                     setTimeout(check, options.timeout);
                 });
@@ -106,7 +107,6 @@ var s3watcher = module.exports = function(options) {
                 var q = queue(10);
                 var emitted = 0;
                 _(data.Contents).each(function(obj) {
-                    if (obj.Key.indexOf('.s3watcher') !== -1) return
                     q.defer(function(callback) {
                         emit(obj.Key, function(err, e) {
                             if (e) emitted++;
@@ -133,7 +133,8 @@ var s3watcher = module.exports = function(options) {
         })({
             Marker: marker,
             Prefix: options.prefix,
-            Bucket: options.bucket
+            Bucket: options.bucket,
+            Delimiter: '/'
         });
     }
 
@@ -179,14 +180,14 @@ var s3watcher = module.exports = function(options) {
 };
 
 // Convert a key into a JavaScript Date object.
-function keyToDate(key) {
+s3watcher.keyToDate = function(key) {
     var datestr = key.split('.')[1].split('-');
     return new Date(Date.UTC(datestr[0], datestr[1] - 1, datestr[2], datestr[3]));
-}
+};
 
 // Convert a JavaScript Date object and S3 prefix into a key suitable for use
 // as a marker.
-function dateToKey(d, prefix) {
+s3watcher.dateToKey = function(d, prefix) {
     prefix = prefix || '';
 
     var dayOfMonth = d.getUTCDate().toString();
@@ -206,4 +207,4 @@ function dateToKey(d, prefix) {
         months[d.getUTCMonth()],
         dayOfMonth,
         hour);
-}
+};
