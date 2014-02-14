@@ -49,7 +49,7 @@ watch.loadState = function(callback) {
                 }, function(err, data) {
                     if (err) return callback(err);
                     var marker = data.Contents[0].Key;
-                    watch.saveState(marker, 0, function(err) {
+                    watch.saveState(marker, function(err) {
                         if (err) return callback(err);
                         return callback(null, marker);
                     });
@@ -120,6 +120,7 @@ function scan(marker, callback) {
                 }
 
                 watch.saveState(marker, function(err) {
+                    if (err) return callback(err);
                     if (data.IsTruncated) {
                         opts.Marker = _(data.Contents).last().Key;
                         fetch(opts);
