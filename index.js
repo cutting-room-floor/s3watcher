@@ -153,7 +153,7 @@ var s3watcher = module.exports = function(options) {
 
         var opts = {
             Bucket: options.bucket,
-            Key: path.join(emittedpath, key)
+            Key: path.join(emittedpath, key + '.emitted')
         };
 
         s3.headObject(opts, function(err, data) {
