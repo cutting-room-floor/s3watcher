@@ -1,3 +1,5 @@
+DEPRECATED: Use [S3 Event Notifications](http://docs.aws.amazon.com/AmazonS3/latest/dev/NotificationHowTo.html) instead.
+
 S3 Watcher
 ==========
 
